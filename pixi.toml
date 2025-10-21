@@ -41,7 +41,7 @@ pre-commit = ">=4.2.0,<5"
 nvidia = { features = ["nvidia"], solve-group = "nvidia" }
 amd = { features = ["amd"], solve-group = "amd" }
 apple = { features = ["apple"], solve-group = "apple" }
-default = { features = ["nvidia"] }
+default = { features = ["amd"] }
 
 [tasks]
 install-pre-commit = "pre-commit install"
