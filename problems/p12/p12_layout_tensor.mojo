@@ -3,6 +3,7 @@ from gpu.host import DeviceContext
 
 # ANCHOR: dot_product_layout_tensor
 from gpu import thread_idx, block_idx, block_dim, barrier
+from gpu.memory import AddressSpace
 from layout import Layout, LayoutTensor
 
 
@@ -23,8 +24,31 @@ fn dot_product[
     b: LayoutTensor[mut=True, dtype, in_layout],
     size: Int,
 ):
-    # FILL ME IN (roughly 13 lines)
-    ...
+    global_idx = block_dim.x * block_idx.x + thread_idx.x
+    local_idx = thread_idx.x
+
+    shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+
+    if global_idx < size:
+        shared[local_idx] = a[global_idx] * b[global_idx]
+    barrier()
+
+    stride = TPB // 2
+
+    while stride > 0:
+        if local_idx < stride:
+            shared[local_idx] += shared[local_idx + stride]
+
+        barrier()
+        stride //= 2
+
+    if local_idx == 0:
+        output[0] = shared[0]
 
 
 # ANCHOR_END: dot_product_layout_tensor
