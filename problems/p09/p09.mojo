@@ -105,7 +105,7 @@ def main():
         print()
 
         with DeviceContext() as ctx:
-            input_ptr = UnsafePointer[Scalar[dtype]]()
+            input_ptr = ctx.enqueue_create_buffer[dtype](SIZE).enqueue_fill(0)
             result_buf = ctx.enqueue_create_buffer[dtype](SIZE).enqueue_fill(0)
 
             # Enqueue function
