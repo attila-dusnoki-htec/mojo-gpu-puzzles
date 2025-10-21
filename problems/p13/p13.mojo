@@ -67,6 +67,7 @@ alias THREADS_PER_BLOCK_2 = (TPB, 1)
 alias in_2_layout = Layout.row_major(SIZE_2)
 alias out_2_layout = Layout.row_major(SIZE_2)
 alias conv_2_layout = Layout.row_major(CONV_2)
+alias WINDOW_SIZE = TPB + CONV_2 - 1
 
 
 fn conv_1d_block_boundary[
@@ -78,7 +79,48 @@ fn conv_1d_block_boundary[
 ):
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
-    # FILL ME IN (roughly 18 lines)
+    shared_a = LayoutTensor[
+        dtype,
+        Layout.row_major(WINDOW_SIZE),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+
+    shared_b = LayoutTensor[
+        dtype,
+        Layout.row_major(CONV_2),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+
+    # Init TPB sized part
+    if global_i < SIZE_2:
+        shared_a[local_i] = a[global_i]
+    else:
+        shared_a[local_i] = 0
+
+    # Init overlapping part (values are from the next block)
+    if local_i < CONV_2 - 1:
+        global_offset = global_i + TPB
+        local_offset = local_i + TPB
+        if global_offset < SIZE_2:
+            shared_a[local_offset] = a[global_offset]
+        else:
+            shared_a[local_offset] = 0
+
+    # we use the same kernel in each block
+    if local_i < CONV_2:
+        shared_b[local_i] = b[local_i]
+
+    barrier()
+
+    if global_i < SIZE_2:
+        tmp = Scalar[dtype](0)
+        @parameter
+        for w in range(CONV_2):
+            if global_i + w < SIZE_2: # faster than shared boundary
+                tmp += rebind[Scalar[dtype]](shared_a[local_i + w]) * rebind[Scalar[dtype]](shared_b[w])
+        output[global_i] = tmp
 
 
 # ANCHOR_END: conv_1d_block_boundary
