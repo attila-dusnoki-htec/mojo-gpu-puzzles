@@ -19,8 +19,30 @@ fn dot_product(
     b: UnsafePointer[Scalar[dtype]],
     size: Int,
 ):
-    # FILL ME IN (roughly 13 lines)
-    ...
+    global_idx = block_dim.x * block_idx.x + thread_idx.x
+    local_idx = thread_idx.x
+
+    shared = stack_allocation[
+        TPB,
+        Scalar[dtype],
+        address_space = AddressSpace.SHARED,
+    ]()
+
+    if global_idx < size:
+        shared[local_idx] = a[global_idx] * b[global_idx]
+    barrier()
+
+    stride = TPB // 2
+
+    while stride > 0:
+        if local_idx < stride:
+            shared[local_idx] += shared[local_idx + stride]
+
+        barrier()
+        stride //= 2
+
+    if local_idx == 0:
+        output[0] = shared[0]
 
 
 # ANCHOR_END: dot_product
