@@ -11,7 +11,7 @@ alias BLOCKS_PER_GRID = (1, 1)
 alias THREADS_PER_BLOCK = (TPB, 1)
 alias dtype = DType.float32
 alias layout = Layout.row_major(SIZE)
-
+alias WINDOW = 3
 
 fn pooling[
     layout: Layout
@@ -30,7 +30,17 @@ fn pooling[
 
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
-    # FIX ME IN (roughly 10 lines)
+
+    if global_i < size:
+        shared[local_i] = a[global_i]
+    barrier()
+
+    tmp = Scalar[dtype](0)
+    for w in range(WINDOW):
+        idx = local_i - w
+        if 0 <= idx < size:
+            tmp += rebind[Scalar[dtype]](shared[idx])
+    output[global_i] = tmp
 
 
 # ANCHOR_END: pooling_layout_tensor
