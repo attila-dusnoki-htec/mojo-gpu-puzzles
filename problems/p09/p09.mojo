@@ -12,7 +12,7 @@ alias BLOCKS_PER_GRID = 1
 alias THREADS_PER_BLOCK = SIZE
 alias dtype = DType.float32
 alias vector_layout = Layout.row_major(SIZE)
-alias ITER = 2
+alias ITER = 3
 
 
 # ANCHOR: first_crash
