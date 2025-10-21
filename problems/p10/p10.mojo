@@ -29,9 +29,11 @@ fn shared_memory_race(
         address_space = AddressSpace.SHARED,
     ].stack_allocation()
 
-    if row < size and col < size:
-        shared_sum[0] += a[row, col]
-
+    shared_sum[0] = 0
+    if row == 0 and col == 0:
+        for r in range(size):
+            for c in range(size):
+                shared_sum[0] += a[r, c]
     barrier()
 
     if row < size and col < size:
