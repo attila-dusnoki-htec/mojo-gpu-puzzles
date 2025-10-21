@@ -11,7 +11,7 @@ alias SIZE = 8
 alias BLOCKS_PER_GRID = (1, 1)
 alias THREADS_PER_BLOCK = (TPB, 1)
 alias dtype = DType.float32
-
+alias WINDOW = 3
 
 fn pooling(
     output: UnsafePointer[Scalar[dtype]],
@@ -25,8 +25,16 @@ fn pooling(
     ]()
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
-    # FILL ME IN (roughly 10 lines)
+    if global_i < size:
+        shared[local_i] = a[global_i]
+    barrier()
 
+    tmp = Scalar[dtype](0)
+    for w in range(WINDOW):
+        idx = local_i - w
+        if 0 <= idx < size:
+            tmp += shared[idx]
+    output[global_i] = tmp
 
 # ANCHOR_END: pooling
 
