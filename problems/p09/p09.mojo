@@ -74,7 +74,6 @@ fn collaborative_filter(
         # Apply collaborative filter with neighbors
         if thread_id > 0:
             shared_workspace[thread_id] += shared_workspace[thread_id - 1] * 0.5
-        barrier()
 
     # Phase 3: Final synchronization and output
     barrier()
