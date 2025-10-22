@@ -6,6 +6,7 @@ from layout import Layout, LayoutTensor
 # ANCHOR: conv1d_kernel
 alias TPB = 15
 alias BLOCKS_PER_GRID = (2, 1)
+alias THREADS_PER_BLOCK = (TPB, 1)
 
 
 fn conv1d_kernel[
@@ -44,6 +45,8 @@ fn conv1d_kernel[
         next_idx = global_i + TPB
         if next_idx < input_size:
             shared_a[TPB + local_i] = input[next_idx]
+        else:
+            shared_a[TPB + local_i] = 0
 
     if local_i < conv_size:
         shared_b[local_i] = kernel[local_i]
@@ -111,8 +114,18 @@ struct Conv1DCustomOp:
                 0,
             )
 
-            # FILL ME IN with 1 line calling our conv1d_kernel
-
+            gpu_ctx.enqueue_function[
+                conv1d_kernel[
+                    in_layout, out_layout, conv_layout, input_size, conv_size, dtype
+                ]
+            ](
+                output_tensor,
+                input_tensor,
+                kernel_tensor,
+                grid_dim=BLOCKS_PER_GRID,
+                block_dim=THREADS_PER_BLOCK,
+            )
+            gpu_ctx.synchronize()
         elif target == "cpu":
             # we can fallback to CPU
             pass
