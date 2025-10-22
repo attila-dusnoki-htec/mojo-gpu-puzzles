@@ -38,28 +38,22 @@ fn softmax_gpu_kernel[
         MutableAnyOrigin,
         address_space = AddressSpace.SHARED,
     ].stack_allocation()
+
     tid = thread_idx.x
 
-    local_val = input[tid]
-
     # init shared max
-    local_max = min_finite[dtype]()
+    local_val = min_finite[dtype]()
     if tid < input_size:
-        local_max = rebind[Scalar[dtype]](local_val)
+        local_val = rebind[Scalar[dtype]](input[tid])
 
-    shared_max[tid] = rebind[Scalar[dtype]](local_max)
+    shared_max[tid] = local_val
     barrier()
 
     # calc max at 0
-    offset = input_size // 2
+    offset = BLOCK_DIM_X // 2
     while offset > 0:
-        tmp = rebind[Scalar[dtype]](shared_max[tid + offset])
-        barrier()
-
-        if tmp > local_max:
-            shared_max[tid] = rebind[Scalar[dtype]](tmp)
-            local_max = rebind[Scalar[dtype]](tmp)
-
+        if tid < offset:
+            shared_max[tid] = max(shared_max[tid], shared_max[tid+offset])
         offset //= 2
         barrier()
 
@@ -74,16 +68,16 @@ fn softmax_gpu_kernel[
     barrier()
 
     # calc sum at 0
-    offset = input_size // 2
+    offset = BLOCK_DIM_X // 2
     while offset > 0:
-        tmp = rebind[Scalar[dtype]](shared_sum[tid + offset])
-        barrier()
-
-        shared_sum[tid] += tmp
+        if tid < offset:
+            shared_sum[tid] += shared_sum[tid + offset]
         offset //= 2
         barrier()
 
     sum_val = shared_sum[0]
+
+    # normalize
     if tid < input_size:
         output[tid] = exp_val / sum_val
 
@@ -102,15 +96,16 @@ fn softmax_cpu_kernel[
 ):
     var max_val: input.element_type = min_finite[dtype]()
     for i in range(input_size):
-        if max_val < input[i]:
-            max_val = input[i]
+        max_val = max(max_val, input[i])
 
-    var denom: input.element_type = 0
+    var sum_exp: input.element_type = 0
     for i in range(input_size):
-        denom += exp(input[i] - max_val)
+        exp_val = exp(input[i] - max_val)
+        sum_exp += exp_val
+        output[i] = exp_val
 
     for i in range(input_size):
-        output[i] = exp(input[i]-max_val) / denom
+        output[i] /= sum_exp
 
 
 # ANCHOR_END: softmax_cpu_kernel
