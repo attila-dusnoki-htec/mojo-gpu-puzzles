@@ -28,8 +28,45 @@ fn axis_sum[
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
     batch = block_idx.y
-    # FILL ME IN (roughly 15 lines)
 
+    shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+
+    if global_i < size:
+        shared[local_i] = a[batch, global_i]
+    else:
+        shared[local_i] = 0
+
+    barrier()
+
+    # Easy version, but slower
+    # if local_i == 0:
+    #     var res: output.element_type = 0
+    #     for i in range(TPB):
+    #         res += shared[i]
+    #     output[batch, 0] = rebind[Scalar[dtype]](res)
+
+    offset = TPB // 2
+    while offset > 0:
+        var tmp: shared.element_type = 0
+        # read
+        if local_i < offset:
+            tmp = shared[local_i + offset]
+        barrier()
+
+        # write
+        if local_i < offset:
+            shared[local_i] += tmp
+
+        offset //= 2
+        barrier()
+
+    if local_i == 0:
+        output[batch, 0] = shared[0]
 
 # ANCHOR_END: axis_sum
 
