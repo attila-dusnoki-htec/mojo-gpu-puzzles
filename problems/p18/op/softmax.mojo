@@ -25,8 +25,67 @@ fn softmax_gpu_kernel[
     output: LayoutTensor[mut=True, dtype, layout],
     input: LayoutTensor[mut=False, dtype, layout],
 ):
-    # FILL IN (roughly 31 lines)
-    ...
+    shared_max = LayoutTensor[
+        dtype,
+        Layout.row_major(BLOCK_DIM_X),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+
+    shared_sum = LayoutTensor[
+        dtype,
+        Layout.row_major(BLOCK_DIM_X),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    tid = thread_idx.x
+
+    local_val = input[tid]
+
+    # init shared max
+    local_max = min_finite[dtype]()
+    if tid < input_size:
+        local_max = rebind[Scalar[dtype]](local_val)
+
+    shared_max[tid] = rebind[Scalar[dtype]](local_max)
+    barrier()
+
+    # calc max at 0
+    offset = input_size // 2
+    while offset > 0:
+        tmp = rebind[Scalar[dtype]](shared_max[tid + offset])
+        barrier()
+
+        if tmp > local_max:
+            shared_max[tid] = rebind[Scalar[dtype]](tmp)
+            local_max = rebind[Scalar[dtype]](tmp)
+
+        offset //= 2
+        barrier()
+
+    max_val = shared_max[0]
+
+    # init shared sum
+    var exp_val: output.element_type = 0
+    if tid < input_size:
+        exp_val = exp(local_val - max_val)
+
+    shared_sum[tid] = exp_val
+    barrier()
+
+    # calc sum at 0
+    offset = input_size // 2
+    while offset > 0:
+        tmp = rebind[Scalar[dtype]](shared_sum[tid + offset])
+        barrier()
+
+        shared_sum[tid] += tmp
+        offset //= 2
+        barrier()
+
+    sum_val = shared_sum[0]
+    if tid < input_size:
+        output[tid] = exp_val / sum_val
 
 
 # ANCHOR_END: softmax_gpu_kernel
@@ -41,8 +100,17 @@ fn softmax_cpu_kernel[
     output: LayoutTensor[dtype, layout, MutableAnyOrigin],
     input: LayoutTensor[dtype, layout, MutableAnyOrigin],
 ):
-    # FILL IN (roughly 10 lines)
-    ...
+    var max_val: input.element_type = min_finite[dtype]()
+    for i in range(input_size):
+        if max_val < input[i]:
+            max_val = input[i]
+
+    var denom: input.element_type = 0
+    for i in range(input_size):
+        denom += exp(input[i] - max_val)
+
+    for i in range(input_size):
+        output[i] = exp(input[i]-max_val) / denom
 
 
 # ANCHOR_END: softmax_cpu_kernel
