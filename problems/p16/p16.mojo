@@ -130,6 +130,68 @@ fn matmul_tiled[
     if tiled_row < size and tiled_col < size:
         output[tiled_row, tiled_col] = tmp
 
+from gpu.memory import async_copy_wait_all
+from layout.layout_tensor import copy_dram_to_sram_async
+
+alias NUM_THREADS = TPB * TPB
+alias BLOCK_DIM_COUNT = 2
+
+fn matmul_tiled_v2[
+    layout: Layout, size: Int
+](
+    output: LayoutTensor[mut=True, dtype, layout],
+    a: LayoutTensor[mut=False, dtype, layout],
+    b: LayoutTensor[mut=False, dtype, layout],
+):
+    local_row = thread_idx.y
+    local_col = thread_idx.x
+    tiled_row = block_idx.y * TPB + thread_idx.y
+    tiled_col = block_idx.x * TPB + thread_idx.x
+
+    shared_a = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB, TPB),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    shared_b = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB, TPB),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+
+    var tmp: output.element_type = 0
+
+    @parameter
+    for i in range(size // TPB):
+        a_tile = a.tile[TPB, TPB](block_idx.y, i)
+        b_tile = b.tile[TPB, TPB](i, block_idx.x)
+
+        copy_dram_to_sram_async[
+            thread_layout=Layout.row_major(1, TPB),
+            num_threads=NUM_THREADS,
+            block_dim_count=BLOCK_DIM_COUNT,
+        ](shared_a, a_tile)
+        copy_dram_to_sram_async[
+            thread_layout=Layout.row_major(1, TPB),
+            num_threads=NUM_THREADS,
+            block_dim_count=BLOCK_DIM_COUNT,
+        ](shared_b, b_tile)
+
+        async_copy_wait_all()
+        barrier()
+
+        @parameter
+        for k in range(TPB):
+            tmp += shared_a[local_row, k] * shared_b[k, local_col]
+        barrier()
+
+    if tiled_row < size and tiled_col < size:
+        # output[tiled_row, tiled_col] = tmp
+        out_tile = output.tile[TPB, TPB](block_idx.y, block_idx.x)
+        out_tile[local_row, local_col] = tmp
+
 # ANCHOR_END: matmul_tiled
 
 
@@ -199,7 +261,7 @@ def main():
                 inp2.unsafe_ptr()
             )
 
-            ctx.enqueue_function[matmul_tiled[layout_tiled, SIZE_TILED]](
+            ctx.enqueue_function[matmul_tiled_v2[layout_tiled, SIZE_TILED]](
                 out_tensor_tiled,
                 a_tensor_tiled,
                 b_tensor_tiled,
