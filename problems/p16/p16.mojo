@@ -98,8 +98,37 @@ fn matmul_tiled[
     local_col = thread_idx.x
     tiled_row = block_idx.y * TPB + thread_idx.y
     tiled_col = block_idx.x * TPB + thread_idx.x
-    # FILL ME IN (roughly 20 lines)
 
+    shared_a = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB, TPB),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    shared_b = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB, TPB),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+
+    var tmp: output.element_type = 0
+
+    @parameter
+    for t in range(0, size, TPB):
+        shared_a[local_row, local_col] = a[tiled_row, local_col + t]
+        shared_b[local_row, local_col] = b[local_row + t, tiled_col]
+
+        barrier()
+
+        @parameter
+        for k in range(TPB):
+            tmp += shared_a[local_row, k] * shared_b[k, local_col]
+
+        barrier()
+
+    if tiled_row < size and tiled_col < size:
+        output[tiled_row, tiled_col] = tmp
 
 # ANCHOR_END: matmul_tiled
 
