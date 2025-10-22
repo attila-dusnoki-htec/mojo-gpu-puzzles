@@ -24,7 +24,36 @@ fn prefix_sum_simple[
 ):
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
-    # FILL ME IN (roughly 18 lines)
+
+    shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+
+    if global_i < size:
+        shared[local_i] = a[global_i]
+
+    barrier()
+
+    offset = 1
+    # We need to use a loop, so each thread has the same
+    # amount of barrier calls
+    @parameter
+    for _ in range(Int(log2(Scalar[dtype](TPB)))):
+        var val: output.element_type = 0
+        if local_i >= offset and local_i < size:
+            val = shared[local_i - offset]
+        barrier()
+
+        if local_i >= offset and local_i < size:
+            shared[local_i] += val
+        offset *=2
+        barrier()
+
+    if global_i < size:
+        output[global_i] = shared[local_i]
 
 
 # ANCHOR_END: prefix_sum_simple
