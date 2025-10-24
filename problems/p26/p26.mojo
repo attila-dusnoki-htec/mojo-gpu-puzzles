@@ -1,11 +1,12 @@
 from gpu import thread_idx, block_idx, block_dim, lane_id
 from gpu.host import DeviceContext
-from gpu.warp import shuffle_xor, prefix_sum, WARP_SIZE
+from gpu.warp import shuffle_xor, prefix_sum
 from layout import Layout, LayoutTensor
 from sys import argv
 from testing import assert_equal, assert_almost_equal
 
 # ANCHOR: butterfly_pair_swap
+alias WARP_SIZE = 32 # On rdna2, this gives back 64 at the moment
 alias SIZE = WARP_SIZE
 alias BLOCKS_PER_GRID = (1, 1)
 alias THREADS_PER_BLOCK = (WARP_SIZE, 1)
@@ -27,7 +28,8 @@ fn butterfly_pair_swap[
     """
     global_i = block_dim.x * block_idx.x + thread_idx.x
 
-    # FILL ME IN (4 lines)
+    if global_i < size:
+        output[global_i] = shuffle_xor(input[global_i], 1)
 
 
 # ANCHOR_END: butterfly_pair_swap
@@ -50,6 +52,13 @@ fn butterfly_parallel_max[
     global_i = block_dim.x * block_idx.x + thread_idx.x
 
     # FILL ME IN (roughly 7 lines)
+    if global_i < size:
+        current_max = input[global_i]
+        offset = WARP_SIZE // 2
+        while offset > 0:
+            current_max = max(current_max, shuffle_xor(current_max, offset))
+            offset //=2
+        output[global_i] = current_max
 
 
 # ANCHOR_END: butterfly_parallel_max
@@ -77,10 +86,18 @@ fn butterfly_conditional_max[
     lane = lane_id()
 
     if global_i < size:
-        current_val = input[global_i]
-        min_val = current_val
+        max_val = min_val = input[global_i]
 
-        # FILL ME IN (roughly 11 lines)
+        offset = WARP_SIZE // 2
+        while offset > 0:
+            min_val = min(min_val, shuffle_xor(min_val, offset))
+            max_val = max(max_val, shuffle_xor(max_val, offset))
+            offset //= 2
+
+        if lane % 2 == 0:
+            output[global_i] = max_val
+        else:
+            output[global_i] = min_val
 
 
 # ANCHOR_END: butterfly_conditional_max
@@ -115,7 +132,8 @@ fn warp_inclusive_prefix_sum[
     """
     global_i = block_dim.x * block_idx.x + thread_idx.x
 
-    # FILL ME IN (roughly 4 lines)
+    if global_i < size:
+        output[global_i] = prefix_sum[exclusive=False](rebind[Scalar[dtype]](input[global_i]))
 
 
 # ANCHOR_END: warp_inclusive_prefix_sum
@@ -150,8 +168,23 @@ fn warp_partition[
     if global_i < size:
         current_val = input[global_i]
 
-        # FILL ME IN (roughly 13 lines)
+        predicate_left = Float32(1) if current_val < pivot else Float32(0)
+        predicate_right = Float32(1) if current_val >= pivot else Float32(0)
 
+        warp_left_pos = prefix_sum[exclusive=True](predicate_left)
+        warp_right_pos = prefix_sum[exclusive=True](predicate_right)
+
+        warp_left_total = predicate_left
+
+        offset = WARP_SIZE // 2
+        while offset > 0:
+            warp_left_total += shuffle_xor(warp_left_total, offset)
+            offset //= 2
+
+        if current_val < pivot:
+            output[Int(warp_left_pos)] = current_val
+        else:
+            output[Int(warp_left_total + warp_right_pos)] = current_val
 
 # ANCHOR_END: warp_partition
 
