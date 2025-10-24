@@ -1,11 +1,12 @@
 from gpu import thread_idx, block_idx, block_dim, lane_id
 from gpu.host import DeviceContext
-from gpu.warp import shuffle_down, broadcast, WARP_SIZE
+from gpu.warp import shuffle_down, broadcast
 from layout import Layout, LayoutTensor
 from sys import argv
 from testing import assert_equal, assert_almost_equal
 
 # ANCHOR: neighbor_difference
+alias WARP_SIZE = 32 # On rdna2, this gives back 64 at the moment
 alias SIZE = WARP_SIZE
 alias BLOCKS_PER_GRID = (1, 1)
 alias THREADS_PER_BLOCK = (WARP_SIZE, 1)
@@ -27,7 +28,13 @@ fn neighbor_difference[
     global_i = block_dim.x * block_idx.x + thread_idx.x
     lane = lane_id()
 
-    # FILL IN (roughly 7 lines)
+    if global_i < size:
+        current_val = input[global_i]
+        next_val = shuffle_down(current_val, 1)
+        if lane < WARP_SIZE - 1:
+            output[global_i] = next_val - current_val
+        else:
+            output[global_i] = 0
 
 
 # ANCHOR_END: neighbor_difference
@@ -53,7 +60,17 @@ fn moving_average_3[
     global_i = block_dim.x * block_idx.x + thread_idx.x
     lane = lane_id()
 
-    # FILL IN (roughly 10 lines)
+    if global_i < size:
+        current_val = input[global_i]
+        next1_val = shuffle_down(current_val, 1)
+        next2_val = shuffle_down(current_val, 2)
+
+        if lane < WARP_SIZE - 2 and global_i < size - 2:
+            output[global_i] = (current_val + next1_val + next2_val) / 3
+        elif lane < WARP_SIZE - 1 and global_i < size - 1:
+            output[global_i] = (current_val + next1_val) / 2
+        else:
+            output[global_i] = current_val
 
 
 # ANCHOR_END: moving_average_3
@@ -76,7 +93,22 @@ fn broadcast_shuffle_coordination[
     if global_i < size:
         var scale_factor: output.element_type = 0.0
 
-        # FILL IN (roughly 14 lines)
+        if lane == 0 :
+            block_start = block_dim.x * block_idx.x
+            @parameter
+            for i in range(4):
+                if block_start + i < size:
+                    scale_factor += input[block_start + i]
+            scale_factor /= 4
+        scale_factor = broadcast(scale_factor)
+
+        current_val = input[global_i]
+        next_val = shuffle_down(current_val, 1)
+
+        if lane < WARP_SIZE - 1:
+            output[global_i] = (current_val + next_val) * scale_factor
+        else:
+            output[global_i] = current_val * scale_factor
 
 
 # ANCHOR_END: broadcast_shuffle_coordination
@@ -97,8 +129,14 @@ fn basic_broadcast[
     lane = lane_id()
     if global_i < size:
         var broadcast_value: output.element_type = 0.0
-
-        # FILL IN (roughly 10 lines)
+        if lane == 0:
+            block_start = block_dim.x * block_idx.x
+            @parameter
+            for i in range(4):
+                if block_start + i < size:
+                    broadcast_value += input[block_start + i]
+        collective_value = broadcast(broadcast_value)
+        output[global_i] = collective_value + input[global_i]
 
 
 # ANCHOR_END: basic_broadcast
@@ -120,7 +158,14 @@ fn conditional_broadcast[
     if global_i < size:
         var decision_value: output.element_type = 0.0
 
-        # FILL IN (roughly 10 lines)
+        if lane == 0:
+            block_start = block_dim.x * block_idx.x
+            decision_value = input[block_start] if block_start < size else 0
+            for i in range(1, min(8, min(WARP_SIZE, size - block_start))):
+                if block_start + i < size:
+                    decision_value = max(decision_value, input[block_start + i])
+
+        decision_value = broadcast(decision_value)
 
         current_input = input[global_i]
         threshold = decision_value / 2.0
