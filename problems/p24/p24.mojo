@@ -1,8 +1,9 @@
 from math import ceildiv
 from gpu import thread_idx, block_idx, block_dim, barrier, lane_id
 from gpu.host import DeviceContext, HostBuffer, DeviceBuffer
+from gpu.host.compile import get_gpu_target
 from gpu.memory import AddressSpace
-from gpu.warp import sum as warp_sum, WARP_SIZE
+from gpu.warp import lane_group_sum_and_broadcast
 from algorithm.functional import elementwise
 from layout import Layout, LayoutTensor
 from utils import IndexList
@@ -22,11 +23,13 @@ from benchmark import (
 )
 
 # ANCHOR: traditional_approach_from_p12
+alias WARP_SIZE = 32  # On rdna2, this gives back 64 at the moment
+alias warp_sum = lane_group_sum_and_broadcast[num_lanes=WARP_SIZE]
 alias SIZE = WARP_SIZE
 alias BLOCKS_PER_GRID = (1, 1)
 alias THREADS_PER_BLOCK = (WARP_SIZE, 1)
 alias dtype = DType.float32
-alias SIMD_WIDTH = simd_width_of[dtype]()
+alias SIMD_WIDTH = simd_width_of[dtype, target = get_gpu_target()]()
 alias in_layout = Layout.row_major(SIZE)
 alias out_layout = Layout.row_major(1)
 
@@ -80,7 +83,15 @@ fn simple_warp_dot_product[
     b: LayoutTensor[mut=False, dtype, in_layout],
 ):
     global_i = block_dim.x * block_idx.x + thread_idx.x
-    # FILL IN (6 lines at most)
+
+    var partial_product: Scalar[dtype] = 0
+    if global_i < size:
+        partial_product = (a[global_i] * b[global_i]).reduce_add()
+
+    total = warp_sum(partial_product)
+
+    if lane_id() == 0:
+        output[global_i // WARP_SIZE] = total
 
 
 # ANCHOR_END: simple_warp_kernel
@@ -106,8 +117,17 @@ fn functional_warp_dot_product[
         simd_width: Int, rank: Int, alignment: Int = align_of[dtype]()
     ](indices: IndexList[rank]) capturing -> None:
         idx = indices[0]
-        print("idx:", idx)
-        # FILL IN (10 lines at most)
+        # print("idx:", idx)
+        var partial_product: Scalar[dtype] = 0
+        if idx < size:
+            a_val = a.load[1](idx, 0)
+            b_val = b.load[1](idx, 0)
+            partial_product = (a_val * b_val).reduce_add()
+
+        total = warp_sum(partial_product)
+
+        if lane_id() == 0:
+            output.store[1](idx // WARP_SIZE, 0, total)
 
     # Launch exactly size == WARP_SIZE threads (one warp) to process all elements
     elementwise[compute_dot_product, 1, target="gpu"](size, ctx)
@@ -348,7 +368,7 @@ def main():
             ctx.synchronize()
     elif argv()[1] == "--benchmark":
         print("-" * 80)
-        bench_config = BenchConfig(max_iters=10, num_warmup_iters=1)
+        bench_config = BenchConfig(max_iters=100, num_warmup_iters=10)
         bench = Bench(bench_config.copy())
 
         print("Testing SIZE=1 x WARP_SIZE, BLOCKS=1")
