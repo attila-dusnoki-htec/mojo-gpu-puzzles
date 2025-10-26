@@ -62,19 +62,50 @@ fn multi_stage_image_blur_pipeline[
 
     # Stage 1: Load and preprocess (threads 0-127)
 
-    # FILL ME IN (roughly 10 lines)
+    if local_i < STAGE1_THREADS:
+        if global_i < size:
+            input_shared[local_i] = input[global_i] * 1.1
+            if local_i + STAGE1_THREADS < size:
+                input_shared[local_i + STAGE1_THREADS] = input[global_i] * 1.1
+        else:
+            input_shared[local_i] = 0
+            if local_i + STAGE1_THREADS < size:
+                input_shared[local_i + STAGE1_THREADS] = 0
 
     barrier()  # Wait for Stage 1 completion
 
     # Stage 2: Apply blur (threads 128-255)
 
-    # FILL ME IN (roughly 25 lines)
+    if local_i >= STAGE1_THREADS:
+        blur_idx = local_i - STAGE1_THREADS
+        var blur_sum: Scalar[dtype] = 0
+        blur_count = 0
+
+        @parameter
+        for offset in range(-BLUR_RADIUS, BLUR_RADIUS + 1):
+            sample_idx = blur_idx + offset
+            if sample_idx >= 0 and sample_idx < TPB:
+                blur_sum += rebind[Scalar[dtype]](input_shared[sample_idx])
+                blur_count += 1
+
+        if blur_count > 0:
+            blur_shared[blur_idx] = blur_sum / blur_count
+        else:
+            blur_shared[blur_idx] = 0
 
     barrier()  # Wait for Stage 2 completion
 
     # Stage 3: Final smoothing (all threads)
 
-    # FILL ME IN (roughly 7 lines)
+    if global_i < size:
+        final_value = blur_shared[local_i]
+
+        if local_i > 0:
+            final_value = (final_value + blur_shared[local_i - 1]) * 0.6
+        if local_i < TPB - 1:
+            final_value = (final_value + blur_shared[local_i + 1]) * 0.6
+
+        output[global_i] = final_value
 
     barrier()  # Ensure all writes complete
 
@@ -139,18 +170,18 @@ fn double_buffered_stencil_computation[
     local_i = thread_idx.x
 
     # Initialize barriers (only thread 0)
-    if local_i == 0:
-        mbarrier_init(init_barrier.ptr, TPB)
-        mbarrier_init(iter_barrier.ptr, TPB)
-        mbarrier_init(final_barrier.ptr, TPB)
+    # if local_i == 0:
+    #     mbarrier_init(init_barrier.ptr, TPB)
+    #     mbarrier_init(iter_barrier.ptr, TPB)
+    #     mbarrier_init(final_barrier.ptr, TPB)
 
     # Initialize buffer_A with input data
 
     # FILL ME IN (roughly 4 lines)
 
     # Wait for buffer_A initialization
-    _ = mbarrier_arrive(init_barrier.ptr)
-    _ = mbarrier_test_wait(init_barrier.ptr, TPB)
+    # _ = mbarrier_arrive(init_barrier.ptr)
+    # _ = mbarrier_test_wait(init_barrier.ptr, TPB)
 
     # Iterative stencil processing with double-buffering
     @parameter
@@ -170,12 +201,12 @@ fn double_buffered_stencil_computation[
             ...
 
         # Memory barrier: wait for all writes before buffer swap
-        _ = mbarrier_arrive(iter_barrier.ptr)
-        _ = mbarrier_test_wait(iter_barrier.ptr, TPB)
+        # _ = mbarrier_arrive(iter_barrier.ptr)
+        # _ = mbarrier_test_wait(iter_barrier.ptr, TPB)
 
         # Reinitialize barrier for next iteration
-        if local_i == 0:
-            mbarrier_init(iter_barrier.ptr, TPB)
+        # if local_i == 0:
+        #     mbarrier_init(iter_barrier.ptr, TPB)
 
     # Write final results from active buffer
     if local_i < TPB and global_i < size:
@@ -189,8 +220,8 @@ fn double_buffered_stencil_computation[
             output[global_i] = buffer_B[local_i]
 
     # Final barrier
-    _ = mbarrier_arrive(final_barrier.ptr)
-    _ = mbarrier_test_wait(final_barrier.ptr, TPB)
+    # _ = mbarrier_arrive(final_barrier.ptr)
+    # _ = mbarrier_test_wait(final_barrier.ptr, TPB)
 
 
 # ANCHOR_END: double_buffered_stencil
